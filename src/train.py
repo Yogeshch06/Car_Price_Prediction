@@ -123,7 +123,8 @@ class ModelTrainer:
                 ),
 
                 "Random Forest": RandomForestRegressor(
-                    random_state=RANDOM_STATE
+                     random_state=RANDOM_STATE,
+                     n_jobs=-1
                 )
 
             }
@@ -156,13 +157,11 @@ class ModelTrainer:
 
                 "Random Forest": {
 
-                    "n_estimators": [100, 200, 300],
-
-                    "max_depth": [10, 20, None],
-
-                    "min_samples_split": [2, 5, 10],
-
-                    "min_samples_leaf": [1, 2, 4]
+                      "n_estimators": [50, 100],
+                      "max_depth": [8, 10, 12],
+                      "min_samples_split": [5, 10],
+                      "min_samples_leaf": [2, 4],
+                      "max_features": ["sqrt"]
 
                 }
 
