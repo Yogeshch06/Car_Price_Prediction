@@ -41,7 +41,6 @@ desktop.ini
 # ==================================================
 logs/
 *.log
-reports/project.log
 
 # ==================================================
 # Python Build Files
@@ -63,21 +62,24 @@ htmlcov/
 
 # ==================================================
 # Dataset
-# (Ignore if dataset is large)
 # ==================================================
 data/raw/
-#data/processed/
+# Uncomment the next line if you don't want to upload
+# processed datasets to GitHub.
+# data/processed/
 
 # ==================================================
 # Trained Models
 # ==================================================
-#models/*.pkl
+models/*.pkl
 
 # ==================================================
-# Reports
+# Reports / Generated Files
 # ==================================================
 reports/charts/
 reports/figures/
+reports/*.csv
+reports/*.json
 
 # ==================================================
 # Streamlit

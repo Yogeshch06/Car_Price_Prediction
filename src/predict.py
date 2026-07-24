@@ -1,14 +1,10 @@
 import sys
 import pandas as pd
 
-from src.utils import (
-    logger,
-    CustomException,
-    load_object,
-    MODEL_PATH,
-    PREPROCESSOR_PATH
-)
-
+from src.utils import load_object
+from src.logger import logging
+from src.exception import CustomException
+from src.config import MODEL_PATH, PREPROCESSOR_PATH
 
 class PredictPipeline:
 
@@ -20,33 +16,33 @@ class PredictPipeline:
 
         try:
 
-            logger.info("Loading preprocessor...")
+            logging.info("Loading preprocessor...")
 
             preprocessor = load_object(self.preprocessor_path)
 
-            logger.info("Preprocessor loaded successfully.")
+            logging.info("Preprocessor loaded successfully.")
 
-            logger.info("Loading trained model...")
+            logging.info("Loading trained model...")
 
             model = load_object(self.model_path)
 
-            logger.info("Model loaded successfully.")
+            logging.info("Model loaded successfully.")
 
-            logger.info("Transforming input data...")
+            logging.info("Transforming input data...")
 
             data_scaled = preprocessor.transform(features)
 
-            logger.info("Prediction started...")
+            logging.info("Prediction started...")
 
             prediction = model.predict(data_scaled)
 
-            logger.info("Prediction completed successfully.")
+            logging.info("Prediction completed successfully.")
 
             return prediction
 
         except Exception as e:
 
-            logger.error(f"Prediction Error: {str(e)}")
+            logging.error(f"Prediction Error: {str(e)}")
 
             raise CustomException(e, sys)
 
@@ -120,13 +116,13 @@ class CustomData:
 
             df = pd.DataFrame(custom_data)
 
-            logger.info("Input dataframe created successfully.")
+            logging.info("Input dataframe created successfully.")
 
             return df
 
         except Exception as e:
 
-            logger.error(f"DataFrame Creation Error: {str(e)}")
+            logging.error(f"DataFrame Creation Error: {str(e)}")
 
             raise CustomException(e, sys)
 
@@ -135,23 +131,23 @@ if __name__ == "__main__":
 
     sample = CustomData(
 
-        levy=1399,
-        prod_year=2018,
-        manufacturer="TOYOTA",
-        category="Sedan",
+        levy=919.0,
+        prod_year=2012,
+        manufacturer="MERCEDES-BENZ",
+        category="Jeep",
         leather_interior="Yes",
-        fuel_type="Petrol",
-        engine_volume=2.0,
-        mileage=45000,
-        cylinders=4,
+        fuel_type="Diesel",
+        engine_volume=3.0,
+        mileage=140200,
+        cylinders=6.0,
         gear_box_type="Automatic",
-        drive_wheels="Front",
-        doors="4",
+        drive_wheels="4x4",
+        doors="2-3",
         wheel="Left wheel",
-        color="Black",
-        airbags=8,
-        is_turbo=0,
-        car_age=7
+        color="Grey",
+        airbags=10,
+        is_turbo=1,
+        car_age=14
 
     )
 

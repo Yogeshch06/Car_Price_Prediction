@@ -24,8 +24,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
-
-from src.utils import logger, BASE_DIR
+from src.logger import logging
+from src.config import BASE_DIR
 from src.predict import PredictPipeline, CustomData
 
 st.set_page_config(
@@ -55,11 +55,6 @@ st.markdown("""
 
 # ---------------------------------------------------------------------------
 # Currency configuration
-#
-# The trained model outputs prices in USD (the dataset's native currency).
-# These are static, approximate conversion rates used purely for display
-# purposes so the user can view estimates in a currency they're comfortable
-# with. They are NOT live/real-time rates.
 # ---------------------------------------------------------------------------
 CURRENCY_RATES = {
     "USD": {"symbol": "$", "rate": 1.0},
@@ -291,11 +286,11 @@ if submitted:
                 st.dataframe(display_alternatives, use_container_width=True, hide_index=True)
         except FileNotFoundError as e:
             st.info("Alternative suggestions unavailable: reference data not found.")
-            logger.warning(str(e))
+            logging.warning(str(e))
 
     except Exception as e:
         st.error(f"Prediction failed: {e}")
-        logger.error(f"Streamlit prediction error: {e}")
+        logging.error(f"Streamlit prediction error: {e}")
 
 st.divider()
 
@@ -383,7 +378,7 @@ except FileNotFoundError as e:
         f"Test data not found at {PROCESSED_DIR}. "
         "Make sure X_test.csv and y_test.csv exist in data/processed/."
     )
-    logger.warning(str(e))
+    logging.warning(str(e))
 
 st.divider()
 st.caption("Car Price Prediction - AI & ML Internship Capstone - PaulTech Software Services")

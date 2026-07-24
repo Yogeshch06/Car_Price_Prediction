@@ -1,310 +1,389 @@
-import os
-import sys
 import json
+import sys
 
+from src.utils import save_object, load_object
 import numpy as np
 import pandas as pd
 
-from sklearn.linear_model import (
-    LinearRegression,
-    Ridge,
-    Lasso
-)
+from scipy.stats import randint, uniform
 
-from sklearn.tree import DecisionTreeRegressor
+from sklearn.compose import TransformedTargetRegressor
 from sklearn.ensemble import RandomForestRegressor
-
-from sklearn.model_selection import RandomizedSearchCV
-
+from sklearn.linear_model import LinearRegression, Ridge, Lasso
 from sklearn.metrics import (
     r2_score,
     mean_absolute_error,
     mean_squared_error
 )
+from sklearn.model_selection import RandomizedSearchCV
+from sklearn.tree import DecisionTreeRegressor
 
-from src.utils import (
-    logger,
-    CustomException,
-    save_object,
-    load_object,
+from src.config import (
     MODEL_PATH,
     PREPROCESSOR_PATH,
-    METRICS_PATH,
-    BEST_PARAMS_PATH,
-    TEST_SIZE,
-    RANDOM_STATE,
-    CV,
-    N_ITER,
-    N_JOBS,
-    VERBOSE
+    RANDOM_STATE
 )
+
+from src.logger import logging
+from src.exception import CustomException
 
 class ModelTrainer:
 
     def __init__(self):
-
         self.model_path = MODEL_PATH
         self.preprocessor_path = PREPROCESSOR_PATH
-        self.metrics_path = METRICS_PATH
-        self.best_params_path = BEST_PARAMS_PATH
 
-    def random_search(
-        self,
-        model,
-        params,
-        X_train,
-        y_train
-    ):
-
-        search = RandomizedSearchCV(
-            estimator=model,
-            param_distributions=params,
-            n_iter=N_ITER,
-            cv=CV,
-            scoring="r2",
-            random_state=RANDOM_STATE,
-            n_jobs=N_JOBS,
-            verbose=VERBOSE
+    @staticmethod
+    def make_model(estimator):
+        """
+        Train on log(price) but predict actual prices.
+        """
+        return TransformedTargetRegressor(
+            regressor=estimator,
+            func=np.log1p,
+            inverse_func=np.expm1
         )
 
-        search.fit(X_train, y_train)
+    @staticmethod
+    def tune_model(
+        model,
+        param_distributions,
+        X_train,
+        y_train,
+        cv=5,
+        scoring="r2",
+        n_iter=40
+    ):
 
-        return search.best_estimator_, search.best_params_
-        
+        random_search = RandomizedSearchCV(
+            estimator=model,
+            param_distributions=param_distributions,
+            n_iter=n_iter,
+            cv=cv,
+            scoring=scoring,
+            n_jobs=-1,
+            random_state=RANDOM_STATE,
+            verbose=1
+        )
+
+        random_search.fit(X_train, y_train)
+
+        logging.info(f"Best Parameters : {random_search.best_params_}")
+        logging.info(f"Best CV Score : {random_search.best_score_:.4f}")
+
+        return (
+            random_search.best_estimator_,
+            random_search.best_params_,
+            random_search.best_score_
+        )
+
     def train(self):
 
         try:
 
-            logger.info("Loading processed datasets...")
+            logging.info("Loading processed dataset...")
 
             X_train = pd.read_csv("data/processed/X_train.csv")
             X_test = pd.read_csv("data/processed/X_test.csv")
 
             y_train = (
                 pd.read_csv("data/processed/y_train.csv")
-                .values
-                .ravel()
+                .values.ravel()
             )
 
             y_test = (
                 pd.read_csv("data/processed/y_test.csv")
-                .values
-                .ravel()
+                .values.ravel()
             )
 
-            logger.info("Processed datasets loaded successfully.")
-            logger.info("Loading preprocessor...")
+            logging.info("Loading preprocessor...")
 
             preprocessor = load_object(
-                self.preprocessor_path
+            self.preprocessor_path
             )
 
-            logger.info("Preprocessor loaded successfully.")
+            X_train_t = preprocessor.transform(X_train)
+            X_test_t = preprocessor.transform(X_test)
 
-            logger.info("Transforming datasets...")
+            logging.info("Creating baseline models...")
 
-            X_train = preprocessor.transform(X_train)
-            X_test = preprocessor.transform(X_test)
+            baseline_models = {
 
-            logger.info("Dataset transformation completed.")
-            
-            logger.info("Initializing models...")
-
-            models = {
-
-                "Linear Regression": LinearRegression(),
-
-                "Ridge": Ridge(),
-
-                "Lasso": Lasso(),
-
-                "Decision Tree": DecisionTreeRegressor(
-                    random_state=RANDOM_STATE
+                "LinearRegression": self.make_model(
+                    LinearRegression()
                 ),
 
-                "Random Forest": RandomForestRegressor(
-                     random_state=RANDOM_STATE,
-                     n_jobs=-1
-                )
+                "Ridge": self.make_model(
+                    Ridge(random_state=RANDOM_STATE)
+                ),
 
+                "Lasso": self.make_model(
+                    Lasso(
+                        random_state=RANDOM_STATE,
+                        max_iter=5000
+                    )
+                ),
+
+                "DecisionTree": self.make_model(
+                    DecisionTreeRegressor(
+                        random_state=RANDOM_STATE
+                    )
+                ),
+
+                "RandomForest": self.make_model(
+                    RandomForestRegressor(
+                        random_state=RANDOM_STATE,
+                        n_jobs=-1
+                    )
+                )
             }
 
-            logger.info("Models initialized successfully.")
+            baseline_results = []
 
-            param_grids = {
+            logging.info("Training baseline models...")
+
+            for name, model in baseline_models.items():
+
+                logging.info(f"Training {name}")
+
+                model.fit(
+                    X_train_t,
+                    y_train
+                )
+
+                preds = model.predict(X_test_t)
+
+                baseline_results.append({
+
+                    "Model": name,
+
+                    "R2": r2_score(
+                        y_test,
+                        preds
+                    ),
+
+                    "MAE": mean_absolute_error(
+                        y_test,
+                        preds
+                    ),
+
+                    "RMSE": np.sqrt(
+                        mean_squared_error(
+                            y_test,
+                            preds
+                        )
+                    )
+
+                })
+
+            baseline_df = (
+                pd.DataFrame(baseline_results)
+                .sort_values(
+                    "R2",
+                    ascending=False
+                )
+                .reset_index(drop=True)
+            )
+
+            best_model_name = baseline_df.iloc[0]["Model"]
+
+            logging.info(
+                f"Best Baseline Model : {best_model_name}"
+            )
+
+            param_distributions = {
 
                 "Ridge": {
 
-                    "alpha": np.logspace(-3, 3, 50)
+                    "regressor__alpha":
+                    uniform(0.01, 300)
 
                 },
 
                 "Lasso": {
 
-                    "alpha": np.logspace(-3, 3, 50)
+                    "regressor__alpha":
+                    uniform(0.001, 30)
 
                 },
 
-                "Decision Tree": {
+                "DecisionTree": {
 
-                    "max_depth": [5, 10, 15, 20, None],
+                    "regressor__max_depth":
+                    [5, 7, 10, 12, 15, 18, 20],
 
-                    "min_samples_split": [2, 5, 10],
+                    "regressor__min_samples_split":
+                    randint(2, 25),
 
-                    "min_samples_leaf": [1, 2, 4]
+                    "regressor__min_samples_leaf":
+                    randint(1, 12),
+
+                    "regressor__max_features":
+                    ["sqrt", "log2", None]
 
                 },
 
-                "Random Forest": {
+                "RandomForest": {
 
-                      "n_estimators": [50, 100],
-                      "max_depth": [8, 10, 12],
-                      "min_samples_split": [5, 10],
-                      "min_samples_leaf": [2, 4],
-                      "max_features": ["sqrt"]
+                    "regressor__n_estimators":
+                    randint(100, 350),
+
+                    "regressor__max_depth":
+                    [8, 10, 12, 15, 18, 20],
+
+                    "regressor__min_samples_split":
+                    randint(2, 20),
+
+                    "regressor__min_samples_leaf":
+                    randint(2, 10),
+
+                    "regressor__max_features":
+                    ["sqrt", "log2", 0.5, 0.7],
+
+                    "regressor__bootstrap":
+                    [True, False]
 
                 }
 
             }
-            results = []
 
-            best_params = {}
+            estimator_lookup = {
 
-            best_model = None
+                "Ridge":
+                Ridge(random_state=RANDOM_STATE),
 
-            best_model_name = None
+                "Lasso":
+                Lasso(
+                    random_state=RANDOM_STATE,
+                    max_iter=5000
+                ),
 
-            best_r2 = float("-inf")
+                "DecisionTree":
+                DecisionTreeRegressor(
+                    random_state=RANDOM_STATE
+                ),
 
-            for name, model in models.items():
-
-                logger.info(f"Training {name}...")
-
-                if name == "Linear Regression":
-
-                    model.fit(X_train, y_train)
-
-                    trained_model = model
-
-                    params = {}
-                else:
-
-                    trained_model, params = self.random_search(
-
-                        model,
-
-                        param_grids[name],
-
-                        X_train,
-
-                        y_train
-
-                    )
-
-                best_params[name] = params
-
-                predictions = trained_model.predict(X_test) 
-
-                r2 = r2_score(y_test, predictions)
-
-                mae = mean_absolute_error(
-                    y_test,
-                    predictions
+                "RandomForest":
+                RandomForestRegressor(
+                    random_state=RANDOM_STATE,
+                    n_jobs=-1
                 )
 
-                mse = mean_squared_error(
-                    y_test,
-                    predictions
+            }
+            if best_model_name == "LinearRegression":
+
+                final_model = baseline_models["LinearRegression"]
+                best_params = "N/A"
+                best_cv_score = None
+
+                logging.info(
+                    "LinearRegression selected. No hyperparameter tuning required."
                 )
 
-                rmse = np.sqrt(mse)
+            else:
 
-                results.append({
-
-                    "Model": name,
-
-                    "R2": r2,
-
-                    "MAE": mae,
-
-                    "MSE": mse,
-
-                    "RMSE": rmse
-
-                })
-
-                logger.info(
-                    f"{name} | R2={r2:.4f} | MAE={mae:.2f}"
+                logging.info(
+                    f"Tuning {best_model_name}..."
                 )
 
-                if r2 > best_r2:
+                wrapped_estimator = self.make_model(
+                    estimator_lookup[best_model_name]
+                )
 
-                    best_r2 = r2
+                final_model, best_params, best_cv_score = self.tune_model(
+                    wrapped_estimator,
+                    param_distributions[best_model_name],
+                    X_train_t,
+                    y_train
+                )
 
-                    best_model = trained_model
+            logging.info("Evaluating final model...")
 
-                    best_model_name = name
+            preds = final_model.predict(X_test_t)
 
-            logger.info("Model evaluation completed.")
+            r2 = r2_score(y_test, preds)
+            mae = mean_absolute_error(y_test, preds)
+            mse = mean_squared_error(y_test, preds)
+            rmse = np.sqrt(mse)
 
-            logger.info(
-                f"Best Model : {best_model_name}"
-            )
+            final_results_df = pd.DataFrame([{
 
-            logger.info(
-                f"Best R2 Score : {best_r2:.4f}"
-            )
-            metrics_df = pd.DataFrame(results)
+                "Model": f"{best_model_name} (Tuned)",
+                "R2": r2,
+                "MAE": mae,
+                "MSE": mse,
+                "RMSE": rmse
 
-            metrics_df.to_csv(
-                self.metrics_path,
+            }])
+
+            final_results_df.to_csv(
+                "reports/metrics.csv",
                 index=False
             )
 
-            logger.info(
-                "Metrics report saved successfully."
+            logging.info(
+                "Metrics saved successfully."
             )
+
             with open(
-                self.best_params_path,
+                "reports/best_params.json",
                 "w"
             ) as file:
 
-                json.dump(
-                    best_params,
-                    file,
-                    indent=4
-                )
+                json.dump({
 
-            logger.info(
+                    "best_model": best_model_name,
+                    "best_params": str(best_params),
+                    "best_cv_r2": best_cv_score
+
+                },
+                file,
+                indent=4)
+
+            logging.info(
                 "Best parameters saved successfully."
             )
+
             save_object(
-
                 self.model_path,
-
-                best_model
-
+                final_model
             )
 
-            logger.info(
-                "Best model saved successfully."
+            logging.info(
+                "Final model saved successfully."
             )
-            return best_model
-        
+
+            logging.info(
+                f"""
+            ==========================
+            Training Completed
+            ==========================
+            Best Model : {best_model_name}
+            R2 Score   : {r2:.4f}
+            MAE        : {mae:.2f}
+            RMSE       : {rmse:.2f}
+            ==========================
+            """
+                        )
+
+            return final_model
+
         except Exception as e:
 
-            logger.error(
-                f"Error during model training : {str(e)}"
+            logging.error(
+                f"Training failed : {str(e)}"
             )
 
             raise CustomException(
                 e,
                 sys
             )
+
+
 if __name__ == "__main__":
 
     trainer = ModelTrainer()
 
     trainer.train()
 
-    print("Training completed successfully.")
+    print("Model Training Completed Successfully.")
