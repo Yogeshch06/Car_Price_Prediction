@@ -8,6 +8,9 @@ Streamlit dashboard for the Car Price Prediction capstone project.
 - Section 1: Prediction form -> predicted price in a highlighted box.
 - Section 2: Model Performance dashboard (metrics + actual vs predicted
   chart + scrollable prediction table with CSV download).
+- Currency: model is trained/predicts in USD. A sidebar selector lets the
+  user view all displayed prices converted into their preferred currency
+  using static approximate conversion rates (clearly labeled as such).
 
 Run with:
     streamlit run app.py
@@ -25,10 +28,6 @@ from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from src.utils import logger, BASE_DIR
 from src.predict import PredictPipeline, CustomData
 
-
-# =============================================================================
-# PAGE CONFIG
-# =============================================================================
 st.set_page_config(
     page_title="Car Price Predictor",
     page_icon="Car",
@@ -36,8 +35,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Light custom styling on top of Streamlit's own theme (works in light & dark
-# mode since it doesn't hardcode background colors, only spacing/accents).
 st.markdown("""
     <style>
     .main .block-container { padding-top: 2rem; max-width: 1100px; }
@@ -56,11 +53,53 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# =============================================================================
-# SIDEBAR
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Currency configuration
+#
+# The trained model outputs prices in USD (the dataset's native currency).
+# These are static, approximate conversion rates used purely for display
+# purposes so the user can view estimates in a currency they're comfortable
+# with. They are NOT live/real-time rates.
+# ---------------------------------------------------------------------------
+CURRENCY_RATES = {
+    "USD": {"symbol": "$", "rate": 1.0},
+    "INR": {"symbol": "Rs. ", "rate": 97.0},
+    "EUR": {"symbol": "€", "rate": 0.88},
+    "GBP": {"symbol": "£", "rate": 0.75},
+    "JPY": {"symbol": "¥", "rate": 163.9},
+    "AED": {"symbol": "AED ", "rate": 3.67},
+}
+
+
+def convert_price(usd_amount: float, currency: str) -> float:
+    """Converts a USD amount into the selected display currency."""
+    return usd_amount * CURRENCY_RATES[currency]["rate"]
+
+
+def format_price(usd_amount: float, currency: str) -> str:
+    """Formats a USD amount as a nicely formatted string in the selected currency."""
+    symbol = CURRENCY_RATES[currency]["symbol"]
+    converted = convert_price(usd_amount, currency)
+    if currency == "JPY":
+        # JPY conventionally has no decimal subunit in casual display
+        return f"{symbol}{converted:,.0f}"
+    return f"{symbol}{converted:,.2f}"
+
+
 with st.sidebar:
     st.markdown("## Car Price Predictor")
+    st.divider()
+
+    st.markdown("**Display Currency**")
+    currency = st.selectbox(
+        "Currency",
+        options=list(CURRENCY_RATES.keys()),
+        index=0,
+        label_visibility="collapsed",
+        help="The model predicts in USD internally; this only changes how prices are displayed.",
+    )
+    st.caption("Approximate conversion, for display only - not live exchange rates.")
+
     st.divider()
 
     st.markdown("**Project**")
@@ -83,9 +122,6 @@ with st.sidebar:
     st.caption("Built with scikit-learn, pandas & Streamlit")
 
 
-# =============================================================================
-# HEADER
-# =============================================================================
 st.title("Car Price Prediction Dashboard")
 st.caption("Estimate a used car's resale price and review model performance on unseen test data.")
 st.divider()
@@ -119,6 +155,10 @@ def find_better_alternatives(pool: pd.DataFrame, predicted_price: float,
     ranks them by a simple "value" score: newer cars (lower car_age) and
     lower mileage rank better. Widens the price band once if too few
     matches are found.
+
+    NOTE: `predicted_price` and the pool's "price" column are both in USD
+    (the model's native currency) - currency conversion is applied only
+    afterwards, at display time.
     """
     def _filter(band):
         lo, hi = predicted_price * (1 - band), predicted_price * (1 + band)
@@ -152,10 +192,6 @@ def find_better_alternatives(pool: pd.DataFrame, predicted_price: float,
 
     return candidates[display_cols].round(0)
 
-
-# =============================================================================
-# SECTION 1 - PREDICTION
-# =============================================================================
 st.header("Predict Car Price")
 
 with st.form("prediction_form"):
@@ -184,9 +220,6 @@ with st.form("prediction_form"):
         )
 
     with col3:
-        # NOTE: matches the bucketed categories the preprocessor was
-        # actually fit on ('2-3', '4-5', '>5') -- do not change without
-        # re-checking the fitted OneHotEncoder categories.
         doors = st.selectbox("Doors", ["2-3", "4-5", ">5"])
         wheel = st.selectbox("Wheel", ["Left wheel", "Right-hand drive"])
         color = st.selectbox(
@@ -227,16 +260,18 @@ if submitted:
         input_df = custom_data.get_data_as_dataframe()
 
         pipeline = PredictPipeline()
-        prediction = pipeline.predict(input_df)[0]
+        prediction_usd = pipeline.predict(input_df)[0]
 
-        st.success(f"### Estimated Price: $ {prediction:,.2f}")
+        st.success(f"### Estimated Price: {format_price(prediction_usd, currency)}")
+        if currency != "USD":
+            st.caption(f"(~ {format_price(prediction_usd, 'USD')} at model output)")
         st.caption(f"{manufacturer or 'Vehicle'} - {prod_year} - {mileage:,} km - {category}")
 
         # ---- Better alternatives in the same price range ----
         st.subheader("Better Alternatives in This Price Range")
         try:
             pool = load_alternatives_pool()
-            alternatives = find_better_alternatives(pool, prediction)
+            alternatives = find_better_alternatives(pool, prediction_usd)
 
             if alternatives.empty:
                 st.info("No comparable listings found in this price range in the available data.")
@@ -245,7 +280,15 @@ if submitted:
                     "Cars priced close to your estimate, ranked by lower mileage and newer "
                     "production year (better value for a similar price)."
                 )
-                st.dataframe(alternatives, use_container_width=True, hide_index=True)
+                display_alternatives = alternatives.copy()
+                if "price" in display_alternatives.columns:
+                    display_alternatives["price"] = display_alternatives["price"].apply(
+                        lambda v: convert_price(v, currency)
+                    ).round(0)
+                    display_alternatives = display_alternatives.rename(
+                        columns={"price": f"price ({currency})"}
+                    )
+                st.dataframe(display_alternatives, use_container_width=True, hide_index=True)
         except FileNotFoundError as e:
             st.info("Alternative suggestions unavailable: reference data not found.")
             logger.warning(str(e))
@@ -256,10 +299,6 @@ if submitted:
 
 st.divider()
 
-
-# =============================================================================
-# SECTION 2 - MODEL PERFORMANCE DASHBOARD
-# =============================================================================
 st.header("Model Performance")
 
 
@@ -281,34 +320,38 @@ try:
     X_test, y_test = load_test_data()
     y_pred = get_predictions_on_test(X_test, y_test)
 
-    r2 = r2_score(y_test, y_pred)
-    mae = mean_absolute_error(y_test, y_pred)
-    mse = mean_squared_error(y_test, y_pred)
+    # Convert to the selected display currency for metrics/chart/table.
+    rate = CURRENCY_RATES[currency]["rate"]
+    symbol = CURRENCY_RATES[currency]["symbol"]
+    y_test_disp = y_test * rate
+    y_pred_disp = y_pred * rate
+
+    r2 = r2_score(y_test_disp, y_pred_disp)  # scale-invariant, same in any currency
+    mae = mean_absolute_error(y_test_disp, y_pred_disp)
+    mse = mean_squared_error(y_test_disp, y_pred_disp)
     rmse = np.sqrt(mse)
 
-    # ---- Metric cards ----
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("R2 Score", f"{r2:.3f}")
-    m2.metric("MAE", f"$ {mae:,.0f}")
-    m3.metric("MSE", f"{mse:,.2e}")
-    m4.metric("RMSE", f"$ {rmse:,.0f}")
+    m2.metric("MAE", f"{symbol}{mae:,.0f}")
+    m3.metric("MSE", f"{mse:,.2e} {currency}²")
+    m4.metric("RMSE", f"{symbol}{rmse:,.0f}")
 
     st.divider()
 
-    # ---- Actual vs Predicted chart ----
     chart_col, table_col = st.columns([1, 1])
 
     with chart_col:
         st.subheader("Actual vs Predicted")
 
         fig, ax = plt.subplots(figsize=(6, 6))
-        ax.scatter(y_test, y_pred, alpha=0.35, s=18, color="#2563EB", edgecolors="none")
+        ax.scatter(y_test_disp, y_pred_disp, alpha=0.35, s=18, color="#2563EB", edgecolors="none")
 
-        lims = [min(y_test.min(), y_pred.min()), max(y_test.max(), y_pred.max())]
+        lims = [min(y_test_disp.min(), y_pred_disp.min()), max(y_test_disp.max(), y_pred_disp.max())]
         ax.plot(lims, lims, "--", color="red", linewidth=1.5, label="Perfect Prediction")
 
-        ax.set_xlabel("Actual Price")
-        ax.set_ylabel("Predicted Price")
+        ax.set_xlabel(f"Actual Price ({currency})")
+        ax.set_ylabel(f"Predicted Price ({currency})")
         ax.set_title("Actual vs Predicted Car Prices", fontweight="bold")
         ax.spines[["top", "right"]].set_visible(False)
         ax.legend(frameon=False)
@@ -316,22 +359,21 @@ try:
 
         st.pyplot(fig)
 
-    # ---- Prediction table + CSV download ----
     with table_col:
         st.subheader("Prediction Table")
 
         results_df = pd.DataFrame({
-            "Actual Price": y_test,
-            "Predicted Price": y_pred,
+            f"Actual Price ({currency})": y_test_disp,
+            f"Predicted Price ({currency})": y_pred_disp,
         }).round(2)
 
         st.dataframe(results_df.head(100), height=420, use_container_width=True)
 
         csv_bytes = results_df.to_csv(index=False).encode("utf-8")
         st.download_button(
-            label="Download Predictions as CSV",
+            label=f"Download Predictions as CSV ({currency})",
             data=csv_bytes,
-            file_name="predictions.csv",
+            file_name=f"predictions_{currency}.csv",
             mime="text/csv",
             use_container_width=True,
         )
